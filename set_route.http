@@ -1,0 +1,28 @@
+curl -X PUT http://localhost:9180/apisix/admin/routes/test-3 \
+  -H "X-API-KEY: edd1c9f034335f136f87ad84b625c8f1" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "uri": "/test-3",
+    "name": "test-3",
+    "methods": ["GET", "POST"],
+    "plugins": {
+      "limit-count": {
+        "redis_host": "redis.apisix-test.svc.cluster.local",
+        "redis_port": 6379,
+        "key": "remote_addr",
+        "count": 5,
+        "time_window": 10,
+        "policy": "redis",
+        "rejected_code": 429,
+        "show_limit_quota_header": true,
+        "redis_timeout": 1000,
+        "redis_password": ""
+      }
+    },
+    "upstream": {
+      "type": "roundrobin",
+      "nodes": {
+        "upstream.apisix-test.svc.cluster.local:80": 1
+      }
+    }
+  }'

@@ -1,7 +1,7 @@
 import requests
 import time
 
-url = "http://localhost:9080/test"
+url = "http://localhost:9080/test-3"
 
 while True:
     try:

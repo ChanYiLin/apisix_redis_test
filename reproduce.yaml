@@ -1,0 +1,290 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: apisix-test
+
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: etcd
+  namespace: apisix-test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: etcd
+  template:
+    metadata:
+      labels:
+        app: etcd
+    spec:
+      containers:
+      - name: etcd
+        image: bitnami/etcd:3.5
+        env:
+          - name: ALLOW_NONE_AUTHENTICATION
+            value: "yes"
+          - name: ETCD_ADVERTISE_CLIENT_URLS
+            value: http://0.0.0.0:2379
+          - name: ETCD_LISTEN_CLIENT_URLS
+            value: http://0.0.0.0:2379
+        ports:
+          - containerPort: 2379
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: etcd
+  namespace: apisix-test
+spec:
+  ports:
+    - port: 2379
+      targetPort: 2379
+  selector:
+    app: etcd
+
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: apisix-test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+      - name: redis
+        image: redis:7.2
+        ports:
+          - containerPort: 6379
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: apisix-test
+spec:
+  ports:
+    - port: 6379
+      targetPort: 6379
+  selector:
+    app: redis
+
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: upstream
+  namespace: apisix-test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: upstream
+  template:
+    metadata:
+      labels:
+        app: upstream
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:alpine
+        ports:
+          - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: upstream
+  namespace: apisix-test
+spec:
+  ports:
+    - port: 80
+  selector:
+    app: upstream
+
+---
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: apisix-config
+  namespace: apisix-test
+data:
+  config.yaml: |
+    apisix:
+      node_listen: 9080              # APISIX listening port
+      enable_ipv6: false
+      enable_debug: true  
+
+      enable_control: true
+      control:
+        ip: "0.0.0.0"
+        port: 9092
+
+    deployment:
+      admin:
+        allow_admin:               # https://nginx.org/en/docs/http/ngx_http_access_module.html#allow
+          - 0.0.0.0/0              # We need to restrict ip access rules for security. 0.0.0.0/0 is for test.
+
+        admin_key:
+          - name: "admin"
+            key: edd1c9f034335f136f87ad84b625c8f1
+            role: admin                 # admin: manage all configuration data
+
+          - name: "viewer"
+            key: 4054f7cf07e344346cd3f287985e76a2
+            role: viewer
+
+      etcd:
+        host:                                                         # it's possible to define multiple etcd hosts addresses of the same etcd cluster.
+          - "http://etcd.apisix-test.svc.cluster.local:2379"          # multiple etcd address
+        prefix: "/apisix"                                             # apisix configurations prefix
+        timeout: 30                                                   # 30 seconds
+
+    plugin_attr:
+      prometheus:
+        export_addr:
+          ip: "0.0.0.0"
+          port: 9091
+      limit-count:
+        redis:
+          host: redis.apisix-test.svc.cluster.local
+          port: 6379
+          timeout: 1000
+          database: 0
+
+
+    etcd:
+      host:
+        - "http://etcd.apisix-test.svc.cluster.local:2379"
+      prefix: "/apisix"
+
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: apisix
+  namespace: apisix-test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: apisix
+  template:
+    metadata:
+      labels:
+        app: apisix
+    spec:
+      containers:
+      - name: apisix
+        image: apache/apisix:3.12.0-debian
+        ports:
+          - containerPort: 9080  # HTTP
+          - containerPort: 9180  # Admin API
+        volumeMounts:
+          - name: config
+            mountPath: /usr/local/apisix/conf/config.yaml
+            subPath: config.yaml
+      volumes:
+        - name: config
+          configMap:
+            name: apisix-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: apisix
+  namespace: apisix-test
+spec:
+  selector:
+    app: apisix
+  ports:
+    - name: http
+      port: 9080
+      targetPort: 9080
+    - name: admin
+      port: 9180
+      targetPort: 9180
+
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: apisix-dashboard-config
+  namespace: apisix-test
+data:
+  config.yaml: |
+    conf:
+      listen:
+        port: 9000
+      etcd:
+        endpoints:
+          - etcd:2379
+
+    authentication:
+      secret: secret
+      expire_time: 3600
+      users:
+        - username: admin
+          password: admin
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: apisix-dashboard
+  namespace: apisix-test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: apisix-dashboard
+  template:
+    metadata:
+      labels:
+        app: apisix-dashboard
+    spec:
+      containers:
+      - name: dashboard
+        image: apache/apisix-dashboard:3.0.1-alpine
+        env:
+          - name: ADMIN_API
+            value: "http://apisix.apisix-test.svc.cluster.local:9180/apisix/admin"
+          - name: CONFIG_PATH
+            value: "/apisix-dashboard/conf/config.yaml"
+        ports:
+          - containerPort: 9000
+        volumeMounts:
+          - mountPath: /usr/local/apisix-dashboard/conf/conf.yaml
+            name: config
+            subPath: conf.yaml
+      volumes:
+        - name: config
+          configMap:
+            name: apisix-dashboard-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: apisix-dashboard
+  namespace: apisix-test
+spec:
+  selector:
+    app: apisix-dashboard
+  ports:
+    - port: 9000
+      targetPort: 9000
